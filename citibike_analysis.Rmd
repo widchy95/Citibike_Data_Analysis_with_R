@@ -1,0 +1,263 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# Load necessary libraries
+library(bigrquery)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+```
+
+### Set Project and Dataset Variables
+
+```{r}
+# Define project and dataset variables
+project_id <- "fastdate"
+dataset_id <- "fastdate.new_york_citibike.merged_citibike_data"
+```
+
+### Query Data from BigQuery
+
+```{r}
+# SQL query to fetch data
+query <- "
+  SELECT
+    tripduration,
+    starttime,
+    stoptime,
+    start_station_name,
+    end_station_name,
+    bikeid,
+    usertype,
+    birth_year,
+    gender,
+    start_latitude,
+    start_longitude,
+    end_latitude,
+    end_longitude
+  FROM
+    `fastdate.new_york_citibike.merged_citibike_data`
+  WHERE
+    tripduration IS NOT NULL
+    AND start_latitude IS NOT NULL
+    AND start_longitude IS NOT NULL
+    AND end_latitude IS NOT NULL
+    AND end_longitude IS NOT NULL
+  LIMIT 1000000
+"
+
+# Execute query and download data
+citibike_data <- bq_project_query(project_id, query) %>%
+  bq_table_download()
+```
+
+### Data Cleaning and Transformation
+
+```{r}
+# Clean and transform data
+citibike_data <- citibike_data %>%
+  mutate(
+    starttime = as.POSIXct(starttime, format = "%Y-%m-%d %H:%M:%S"),
+    stoptime = as.POSIXct(stoptime, format = "%Y-%m-%d %H:%M:%S"),
+    trip_duration_minutes = tripduration / 60,
+    trip_duration_hours = tripduration / 3600, # Convert seconds to hours
+    age = ifelse(!is.na(birth_year), year(Sys.Date()) - birth_year, NA)
+  ) %>%
+  filter(age >= 10 & age <= 90)  # Filter out extreme ages
+
+```
+
+### Summary Statistics
+
+```{r}
+# Calculate summary statistics
+summary_stats <- citibike_data %>%
+  summarize(
+    avg_trip_duration = mean(tripduration),
+    median_trip_duration = median(tripduration),
+    max_trip_duration = max(tripduration),
+    total_trips = n(),
+    avg_age = mean(age, na.rm = TRUE)
+  )
+
+print(summary_stats)
+```
+
+### Top 10 Popular Start Stations
+
+```{r}
+# Identify top 10 popular start stations
+popular_stations <- citibike_data %>%
+  group_by(start_station_name) %>%
+  summarize(trips = n()) %>%
+  arrange(desc(trips)) %>%
+  top_n(10, trips)
+
+print(popular_stations)
+```
+
+### Analyze Usage Patterns by Time of Day
+
+```{r}
+# Analyze usage patterns by hour of the day
+time_of_day_stats <- citibike_data %>%
+  mutate(hour = hour(starttime)) %>%
+  group_by(hour) %>%
+  summarize(
+    avg_trip_duration = mean(tripduration),
+    total_trips = n()
+  )
+print(time_of_day_stats)
+```
+
+### Analyze Usage Patterns by Day of the Week
+
+```{r}
+# Analyze usage patterns by day of the week
+day_of_week_stats <- citibike_data %>%
+  mutate(weekday = weekdays(starttime)) %>%
+  group_by(weekday) %>%
+  summarize(
+    avg_trip_duration = mean(tripduration),
+    total_trips = n()
+  )
+print(day_of_week_stats)
+```
+
+### Gender and Age Analysis
+
+```{r}
+# Analyze age and trip counts by gender
+gender_age_stats <- citibike_data %>%
+  group_by(gender) %>%
+  summarize(
+    avg_age = mean(age, na.rm = TRUE),
+    total_trips = n()
+  )
+print(gender_age_stats)
+```
+
+
+### Visualizations
+
+#### Geographic Distribution of Start Stations
+
+```{r}
+# Visualize geographic distribution of start stations
+ggplot(citibike_data, aes(x = start_longitude, y = start_latitude)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  labs(
+    title = "Geographic Distribution of Start Stations",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+#### Top 10 Popular Start Stations
+
+```{r}
+ggplot(popular_stations, aes(x = reorder(start_station_name, -trips), y = trips)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  coord_flip() +
+  labs(title = "Top 10 Popular Start Stations", x = "Station Name", y = "Number of Trips") +
+  theme_minimal()
+```
+
+
+
+#### Usage Patterns by Time of Day
+
+```{r}
+ggplot(time_of_day_stats, aes(x = hour, y = total_trips)) +
+  geom_line(color = "red") +
+  labs(title = "Usage Patterns by Time of Day", x = "Hour of the Day", y = "Number of Trips") +
+  theme_minimal()
+```
+### Trip Duration Distribution
+```{r}
+# Distribution of trip duration
+trip_duration_distribution <- citibike_data %>%
+  filter(trip_duration_minutes <= 60)  # Exclude extreme values for visualization
+
+ggplot(trip_duration_distribution, aes(x = trip_duration_minutes)) +
+  geom_histogram(binwidth = 5, fill = "skyblue", color = "black") +
+  labs(
+    title = "Distribution of Trip Durations",
+    x = "Trip Duration (Minutes)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+```
+
+
+#### Usage Patterns by Day of the Week
+
+```{r}
+ggplot(day_of_week_stats, aes(x = reorder(weekday, total_trips), y = total_trips)) +
+  geom_bar(stat = "identity", fill = "purple") +
+  labs(title = "Usage Patterns by Day of the Week", x = "Day", y = "Number of Trips") +
+  theme_minimal()
+```
+#### Age Distribution of Riders
+
+```{r}
+# Age distribution analysis
+age_distribution <- citibike_data %>%
+  filter(!is.na(age)) %>%
+  group_by(age) %>%
+  summarize(total_trips = n())
+
+# Visualization: Age Distribution
+ggplot(age_distribution, aes(x = age, y = total_trips)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Age Distribution of Riders", x = "Age", y = "Number of Trips") +
+  theme_minimal()
+
+```
+
+#### Average Age by Gender
+
+```{r}
+ggplot(gender_age_stats, aes(x = gender, y = avg_age, fill = gender)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Age by Gender", x = "Gender", y = "Average Age") +
+  theme_minimal()
+```
+
+#### User Type Breakdown
+
+```{r}
+# Analyze user type breakdown
+user_type_stats <- citibike_data %>%
+  group_by(usertype) %>%
+  summarize(total_trips = n())
+
+ggplot(user_type_stats, aes(x = usertype, y = total_trips, fill = usertype)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "User Type Breakdown",
+    x = "User Type",
+    y = "Number of Trips"
+  ) +
+  theme_minimal()
+
+```
+
+
+### Clean Up
+
+```{r}
+# Free up memory
+rm(citibike_data)
+gc()
+```
